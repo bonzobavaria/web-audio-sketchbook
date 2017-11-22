@@ -1,0 +1,202 @@
+<meta charset="utf-8">
+<title>Web Audio Buffer</title>
+<script src="../ramda.min.js"></script>
+<script src="https://d3js.org/d3.v4.min.js"></script>
+<style>
+  body {
+    background: peachpuff;
+  }
+</style>
+<body>
+<svg width="960" height="500"></svg>
+<br />
+<button onclick="play()">play</button>
+<button onclick="stop()">stop</button>
+<h3>Zoom Y</h3>
+<input id="ampWinSlider" type="range" min="1" max="10" value="1" step="0.1" onchange="setAmpWindow()">
+<script>
+
+  /* This is an example of building signals and effects using function
+  composition. Performance is not good. Would it improve using imperative
+  techniques? */
+
+  const 
+    audioCtx = new window.AudioContext,
+    audioNodes = [],
+    { sampleRate } = audioCtx,
+    ampWinSlider = document.getElementById('ampWinSlider')
+
+  let ampWindow = 1
+
+  const
+    // generators
+    sinWave = (freq, duration = sampleRate) =>
+      R.range(0, duration).map((s, i) =>
+        Math.sin(2 * Math.PI * i * freq / sampleRate)),
+
+    fmSine = (freq, mod, duration = mod.length) =>
+      R.range(0, duration).map((s, i) =>
+        Math.sin(2 * Math.PI * i * freq / sampleRate + mod[i])),
+
+    impulse = size => R.range(0, size).map(s => Math.random() * 2 - 1)
+
+    // gain, env, mod
+    attenuate = (signal, amt) =>
+      signal.map(s => s * amt),
+
+    ampMod = (carrier, modulator) => carrier.map((s, i) => s * modulator[i]),
+
+    // number utils
+    /* NOTE Always keep it discrete
+    A non-integer sample size is meaningless and causes bad sounds
+    Use Math.round */
+    msToSamp = n => Math.round(n * audioCtx.sampleRate / 1000),
+
+    freqToSamp = n => Math.round(sampleRate / n),
+
+    // effects
+    simpleDelay = (signal, time = 2000, level = 0.6, feedback = 0.9, start = 0) => {
+      // You probably never need to pass in a start value
+      if (level < 0.001) return signal
+
+      const delayedSignal = attenuate(signal, level)
+      const newBuffer = R.range(0, signal.length + time)
+      const newSignal = newBuffer.reduce((acc, sample, index) => {
+        let value = 0
+        if (signal[index]) value += signal[index]
+        if (delayedSignal[index - (time + start)]) value += delayedSignal[index - (time + start)]
+        acc.push(value)
+
+        return acc
+      }, [])
+
+      const newStart = start + time
+      const newLevel = level * feedback
+
+      return simpleDelay(newSignal, time, newLevel, feedback, newStart)
+    }
+
+  // Delay Presets
+  const
+    guitarDelay = x =>
+      simpleDelay(x, msToSamp(50), 0.2, 0.2),
+
+    combDelay = (impulse, frequency) =>
+      simpleDelay(impulse, freqToSamp(frequency), 1, 0.98),
+
+    coolDelay = x =>
+      simpleDelay(x, 2000, 0.6, 0.9)
+  
+  // amSignal
+  const amSignal = (carr = 220, mod1 = 1, mod2 = 55, duration = msToSamp(5000)) => {
+    const modulator = sinWave(1, duration),
+          modulator2 = sinWave(55, duration),
+          carrier = sinWave(220, duration),
+          output = 
+            coolDelay(
+              ampMod(
+                ampMod(carrier, modulator)
+              , modulator2)
+            )
+
+    return output
+  }
+
+  // Delayed FM Signal
+  const fmSignal = (carFreq = 200, modFreq = 500) => {
+    const modulator = sinWave(modFreq),
+          carrier = fmSine(carFreq, modulator)
+          output = 
+            attenuate(
+              coolDelay(
+                attenuate(carrier, 0.3)
+              )
+            , 0.5)
+
+    return output
+  }
+
+  const combOsc = frequency => combDelay(impulse(300), frequency)
+
+  // Comb note
+  const pluck = (freq = 110) =>
+    attenuate(guitarDelay(combOsc(freq)), 0.7)
+
+  // const 
+  //   pluck = combOsc(110)
+  //   impulseSignal = attenuate(guitarDelay(pluck), 0.7)
+
+  // Choose one
+  const signal = 
+    pluck()
+    // amSignal()
+    // fmSignal()
+
+  const play = () => {
+    // this patch is monophonic
+    // stop any playing audio nodes and pull them off the stack
+    if (audioNodes.length) {
+      audioNodes[0].stop()
+      audioNodes.pop()
+    }
+
+    const 
+      buffer = audioCtx.createBuffer(1, signal.length, audioCtx.sampleRate),
+      channel = buffer.getChannelData(0)
+    
+    channel.forEach((s, i) => channel[i] = signal[i])
+  
+    const node = audioCtx.createBufferSource()
+    node.buffer = buffer
+    node.connect(audioCtx.destination)
+    node.start()
+
+    audioNodes.push(node)
+  }
+
+  const stop = () => audioNodes.forEach(node => node.stop())
+
+  // TODO change so that xScale.domain is window size,
+  // filter ungraphed values out of signal
+  const wStart = 0,
+        wSize = signal.length,
+        wEnd = wStart + wSize,
+        scopeWindow = [wStart, wEnd]
+  
+  const drawScope = () => {
+
+    const xScale = d3.scaleLinear()
+            .domain(d3.extent(scopeWindow))
+            .range([0, 960])
+
+          , yScale = d3.scaleLinear()
+            .domain([-ampWindow, ampWindow])
+            .range([0, 500])
+          
+    const line = d3.line()
+          .x((d, i) => xScale(i))
+          .y(d => yScale(d))
+
+          , data = line(signal)
+
+    d3.select('svg')
+      .style('background', '#222')
+      .append('path')
+      .attr('fill', 'none')
+      .attr('stroke', 'springgreen')
+      .attr('stroke-width', 2)
+      .attr('d', data)
+  }
+
+  const setAmpWindow = () => {
+    ampWindow = 1 / ampWinSlider.value
+    d3.select('path')
+      .remove()
+    drawScope()
+  }
+
+  window.onload = drawScope
+
+</script>
+</body>
+

@@ -1,0 +1,21 @@
+
+<meta charset="utf-8">
+<title>Web Audio Buffer</title>
+<script>
+  /* This is pretty much the simplest possible example of creating
+  an array of audio data from scratch and playing it with the browser */
+  const audioCtx = new window.AudioContext
+
+  const play = () => {
+    const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate, audioCtx.sampleRate)
+    let buf = buffer.getChannelData(0)
+  
+    buf.forEach((s, i) => buf[i] = Math.sin(2*Math.PI * i * 220 / audioCtx.sampleRate))
+  
+    const node = audioCtx.createBufferSource()
+    node.buffer = buffer
+    node.connect(audioCtx.destination)
+    node.start()
+  }
+</script>
+<button onclick="play()">play</button>
